@@ -1,0 +1,57 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: sgp-analyzer
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/sgp_analyzer
+    username: sgp
+    password: sgp_dev_password
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  cache:
+    type: redis
+
+# External API configuration
+sgp:
+  clients:
+    odds-api:
+      base-url: https://api.the-odds-api.com/v4
+      api-key: ${ODDS_API_KEY:your-api-key-here}
+    sports-data:
+      base-url: https://v1.american-football.api-sports.io
+      api-key: ${SPORTS_DATA_API_KEY:your-api-key-here}
+    espn:
+      base-url: https://site.api.espn.com/apis/site/v2/sports/football/nfl
+
+  simulation:
+    default-iterations: 100000
+
+  correlation:
+    rebuild-cron: "0 0 3 * * *"  # 3 AM daily
+    cache-ttl-hours: 1
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html

@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sgp-postgres
+    environment:
+      POSTGRES_DB: sgp_analyzer
+      POSTGRES_USER: sgp
+      POSTGRES_PASSWORD: sgp_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: sgp-redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:

@@ -1,0 +1,16 @@
+package com.sgpanalyzer.model.enums;
+
+public enum Market {
+    PASSING_YARDS,
+    RECEIVING_YARDS,
+    RUSHING_YARDS,
+    RECEPTIONS,
+    TOUCHDOWNS,
+    COMPLETIONS,
+    INTERCEPTIONS,
+    PASSING_TOUCHDOWNS,
+    RECEIVING_TOUCHDOWNS,
+    RUSHING_TOUCHDOWNS,
+    CARRIES,
+    TARGETS
+}
