@@ -4,6 +4,7 @@ import com.sgpanalyzer.exception.ResourceNotFoundException;
 import com.sgpanalyzer.model.dto.BestParlayResponse;
 import com.sgpanalyzer.model.dto.CorrelationLookupResponse;
 import com.sgpanalyzer.model.dto.TeamCorrelationMatrixResponse;
+import com.sgpanalyzer.model.entity.GameLog;
 import com.sgpanalyzer.model.entity.PlayerCorrelation;
 import com.sgpanalyzer.model.entity.PlayerStatistic;
 import com.sgpanalyzer.model.enums.Market;
@@ -12,20 +13,28 @@ import com.sgpanalyzer.repository.PlayerCorrelationRepository;
 import com.sgpanalyzer.repository.PlayerStatisticRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.math3.stat.correlation.PearsonsCorrelation;
+import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
+import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
+import java.time.Instant;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class CorrelationService {
 
+    private static final int MIN_SAMPLE_SIZE = 5;
+
     private final PlayerCorrelationRepository correlationRepository;
     private final PlayerStatisticRepository statisticRepository;
     private final GameLogRepository gameLogRepository;
+    private final CacheManager cacheManager;
 
     /**
      * Looks up the precomputed correlation between two players for given markets.
@@ -62,25 +71,36 @@ public class CorrelationService {
             throw new ResourceNotFoundException("No player data found for team: " + team);
         }
 
-        // TODO: Step 1 — Get distinct player names from team statistics
-        //  List<String> playerNames = teamPlayers.stream()
-        //      .map(PlayerStatistic::getPlayerName)
-        //      .distinct()
-        //      .sorted()
-        //      .toList();
+        // Get distinct player names
+        List<String> playerNames = teamPlayers.stream()
+                .map(PlayerStatistic::getPlayerName)
+                .distinct()
+                .sorted()
+                .toList();
 
-        // TODO: Step 2 — Query all pairwise correlations for those players
-        //  List<PlayerCorrelation> correlations = correlationRepository.findAllByPlayersIn(playerNames);
+        int n = playerNames.size();
+        double[][] matrix = new double[n][n];
 
-        // TODO: Step 3 — Build NxN matrix where matrix[i][j] = correlation(player_i, player_j)
-        //  Diagonal = 1.0
-        //  Fill both (i,j) and (j,i) from each stored correlation
+        // Diagonal = 1.0 (a player is perfectly correlated with themselves)
+        for (int i = 0; i < n; i++) {
+            matrix[i][i] = 1.0;
+        }
 
-        // TODO: Step 4 — Return assembled matrix response
+        // Fill off-diagonal from stored correlations
+        List<PlayerCorrelation> correlations = correlationRepository.findAllByPlayersIn(playerNames);
+        for (PlayerCorrelation pc : correlations) {
+            int i = playerNames.indexOf(pc.getPlayerA());
+            int j = playerNames.indexOf(pc.getPlayerB());
+            if (i >= 0 && j >= 0) {
+                matrix[i][j] = pc.getCorrelation();
+                matrix[j][i] = pc.getCorrelation();
+            }
+        }
+
         return TeamCorrelationMatrixResponse.builder()
                 .team(team.toUpperCase())
-                .players(List.of()) // TODO: replace with playerNames
-                .matrix(new double[0][0]) // TODO: replace with computed matrix
+                .players(playerNames)
+                .matrix(matrix)
                 .build();
     }
 
@@ -117,26 +137,134 @@ public class CorrelationService {
     public void rebuildCorrelations() {
         log.info("Starting correlation rebuild...");
 
-        // TODO: Step 1 — Fetch all distinct (playerName, market) combinations from game_logs
-        //  Group game logs by (playerName, market) to get stat value arrays
+        List<GameLog> allLogs = gameLogRepository.findAll();
 
-        // TODO: Step 2 — For each pair of (playerA, marketA) and (playerB, marketB):
-        //  a. Find games where BOTH players have data (inner join on gameId)
-        //  b. Extract paired stat value arrays
-        //  c. Require minimum sample size (e.g., 5 games)
-        //  d. Compute Pearson correlation using Apache Commons Math:
-        //     PearsonsCorrelation corr = new PearsonsCorrelation();
-        //     double r = corr.correlation(valuesA, valuesB);
-        //  e. Upsert into player_correlations table
+        // Step 1: Group game logs by (playerName, market) → Map<"player|market", Map<gameId, value>>
+        Map<String, Map<String, Double>> playerMarketGames = new HashMap<>();
+        Map<String, String> playerTeams = new HashMap<>();
 
-        // TODO: Step 3 — Update player_statistics table with mean/stddev per player per market:
-        //  DescriptiveStatistics stats = new DescriptiveStatistics(values);
-        //  mean = stats.getMean();
-        //  stdDev = stats.getStandardDeviation();
+        for (GameLog gl : allLogs) {
+            String key = gl.getPlayerName() + "|" + gl.getMarket().name();
+            playerMarketGames
+                    .computeIfAbsent(key, k -> new LinkedHashMap<>())
+                    .put(gl.getGameId(), gl.getStatValue());
+            playerTeams.put(gl.getPlayerName(), gl.getTeam());
+        }
 
-        // TODO: Step 4 — Evict correlation cache in Redis after rebuild
-        //  cacheManager.getCache("correlations").clear();
+        List<String> keys = new ArrayList<>(playerMarketGames.keySet());
+        int correlationsComputed = 0;
 
-        log.info("Correlation rebuild complete.");
+        // Step 2: For each pair, compute Pearson correlation on shared games
+        PearsonsCorrelation pearson = new PearsonsCorrelation();
+
+        for (int i = 0; i < keys.size(); i++) {
+            for (int j = i + 1; j < keys.size(); j++) {
+                String keyA = keys.get(i);
+                String keyB = keys.get(j);
+
+                Map<String, Double> gamesA = playerMarketGames.get(keyA);
+                Map<String, Double> gamesB = playerMarketGames.get(keyB);
+
+                // Find shared games (inner join on gameId)
+                List<String> sharedGames = gamesA.keySet().stream()
+                        .filter(gamesB::containsKey)
+                        .toList();
+
+                if (sharedGames.size() < MIN_SAMPLE_SIZE) {
+                    continue;
+                }
+
+                double[] valuesA = sharedGames.stream().mapToDouble(gamesA::get).toArray();
+                double[] valuesB = sharedGames.stream().mapToDouble(gamesB::get).toArray();
+
+                double correlation = pearson.correlation(valuesA, valuesB);
+
+                // Skip if NaN (happens when one array has zero variance)
+                if (Double.isNaN(correlation)) {
+                    continue;
+                }
+
+                // Parse player and market from keys
+                String[] partsA = keyA.split("\\|");
+                String[] partsB = keyB.split("\\|");
+                String playerA = partsA[0];
+                Market marketA = Market.valueOf(partsA[1]);
+                String playerB = partsB[0];
+                Market marketB = Market.valueOf(partsB[1]);
+
+                // Normalize ordering: alphabetical by player name
+                if (playerA.compareTo(playerB) > 0) {
+                    String tmpP = playerA; playerA = playerB; playerB = tmpP;
+                    Market tmpM = marketA; marketA = marketB; marketB = tmpM;
+                }
+
+                // Upsert correlation
+                PlayerCorrelation existing = correlationRepository
+                        .findByPlayerAAndPlayerBAndMarketAAndMarketB(playerA, playerB, marketA, marketB)
+                        .orElse(null);
+
+                if (existing != null) {
+                    existing.setCorrelation(correlation);
+                    existing.setSampleSize(sharedGames.size());
+                    existing.setComputedAt(Instant.now());
+                    correlationRepository.save(existing);
+                } else {
+                    correlationRepository.save(PlayerCorrelation.builder()
+                            .playerA(playerA)
+                            .playerB(playerB)
+                            .marketA(marketA)
+                            .marketB(marketB)
+                            .correlation(correlation)
+                            .sampleSize(sharedGames.size())
+                            .computedAt(Instant.now())
+                            .build());
+                }
+                correlationsComputed++;
+            }
+        }
+
+        // Step 3: Update player_statistics (mean, stddev per player per market)
+        int statsComputed = 0;
+        for (Map.Entry<String, Map<String, Double>> entry : playerMarketGames.entrySet()) {
+            String[] parts = entry.getKey().split("\\|");
+            String playerName = parts[0];
+            Market market = Market.valueOf(parts[1]);
+            String team = playerTeams.get(playerName);
+
+            double[] values = entry.getValue().values().stream().mapToDouble(d -> d).toArray();
+            DescriptiveStatistics stats = new DescriptiveStatistics(values);
+
+            PlayerStatistic existing = statisticRepository
+                    .findByPlayerNameAndMarket(playerName, market)
+                    .orElse(null);
+
+            if (existing != null) {
+                existing.setMean(stats.getMean());
+                existing.setStdDev(stats.getStandardDeviation());
+                existing.setSampleSize((int) stats.getN());
+                existing.setUpdatedAt(Instant.now());
+                statisticRepository.save(existing);
+            } else {
+                statisticRepository.save(PlayerStatistic.builder()
+                        .playerName(playerName)
+                        .team(team)
+                        .market(market)
+                        .mean(stats.getMean())
+                        .stdDev(stats.getStandardDeviation())
+                        .sampleSize((int) stats.getN())
+                        .updatedAt(Instant.now())
+                        .build());
+            }
+            statsComputed++;
+        }
+
+        // Step 4: Evict correlation cache
+        var cache = cacheManager.getCache("correlations");
+        if (cache != null) {
+            cache.clear();
+        }
+
+        log.info("Correlation rebuild complete. Computed {} correlations, {} player stats.",
+                correlationsComputed, statsComputed);
     }
 }
