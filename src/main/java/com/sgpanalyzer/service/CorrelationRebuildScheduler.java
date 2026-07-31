@@ -31,8 +31,9 @@ public class CorrelationRebuildScheduler {
             //  Adjust for NFL season spanning two calendar years (Sep-Feb)
             int currentSeason = 2025; // TODO: compute dynamically
 
-            // TODO: Step 2 — Ingest latest data
-            dataIngestionService.ingestPlayerStats(currentSeason);
+            // TODO: Step 2 — Ingest latest data for all teams (currently single-team)
+            //  For full automation, loop over all 32 NFL teams or maintain a configured list
+            dataIngestionService.ingestPlayerStats("ATL", currentSeason);
 
             // TODO: Step 3 — Rebuild correlations from updated game logs
             correlationService.rebuildCorrelations();
