@@ -10,18 +10,19 @@ import org.springframework.context.annotation.Configuration;
 public class OpenApiConfig {
 
     @Bean
-    public OpenAPI sgpAnalyzerOpenAPI() {
+    public OpenAPI parlayPricerOpenAPI() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("SGP Analyzer API")
+                        .title("ParlayPricer API")
                         .version("1.0.0")
                         .description("""
-                                Same Game Parlay correlation analysis and fair odds engine.
+                                Correlated Monte Carlo pricing engine for Same Game Parlays.
                                 
-                                Analyzes betting parlays by computing player correlations from historical data,
-                                running Monte Carlo simulations, and calculating fair odds + expected value.
+                                Estimates true joint probabilities using correlated simulations,
+                                computes fair odds via Cholesky decomposition, and identifies
+                                mispriced parlay markets.
                                 """)
                         .contact(new Contact()
-                                .name("SGP Analyzer")));
+                                .name("ParlayPricer")));
     }
 }

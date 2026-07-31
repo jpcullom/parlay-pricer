@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: sgp-analyzer
+    name: parlay-pricer
 
   datasource:
     url: jdbc:postgresql://localhost:5432/sgp_analyzer
