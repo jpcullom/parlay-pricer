@@ -42,6 +42,7 @@ sgp:
       api-key: ${SPORTS_DATA_API_KEY:your-api-key-here}
     espn:
       base-url: https://site.api.espn.com/apis/site/v2/sports/football/nfl
+      gamelog-base-url: https://site.web.api.espn.com/apis/common/v3/sports/football/nfl
 
   simulation:
     default-iterations: 100000
